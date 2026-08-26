@@ -1,0 +1,4 @@
+# linker filles
+*.o
+# executable files
+*.out
