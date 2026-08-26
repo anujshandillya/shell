@@ -1,5 +1,6 @@
 #include "shell.hpp"
-#include "parser.cpp"
+#include "parser.hpp"
+#include "history.hpp"
 
 #include <iostream>
 #include <string>
@@ -34,6 +35,7 @@ void Shell::signal_handler(int signum) {
 }
 
 void Shell::process_input(const string& input) {
+    Shell::history.add(input);
     if(input == "exit") {
         Shell::is_running = false;
         return;

@@ -2,3 +2,5 @@
 *.o
 # executable files
 *.out
+# history file
+.anujsh
