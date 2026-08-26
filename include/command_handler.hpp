@@ -1,3 +1,5 @@
+#pragma once
+
 #include "command.hpp"
 
 class CommandHandler {
