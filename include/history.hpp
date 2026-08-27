@@ -1,23 +1,21 @@
 #pragma once
 
 #include <iostream>
-#include <vector>
-#include <string>
 
 using namespace std;
 
 class History {
 public:
     History();
-    void add(const string& command);
+    void add(const char *command);
 
-    const string& previous();
-    const string& next();
+    const char *previous();
+    const char *next();
 
     void print();
     ~History();
 private:
-    vector<string> commands;
+    char **commands;
     int currentIndex;
     int fd;
 };

@@ -1,6 +1,6 @@
 #pragma once
 
-// #include "parser.hpp"
+#include "parser.hpp"
 // #include "command_handler.hpp"
 #include "history.hpp"
 // #include "terminal.hpp"
@@ -19,12 +19,13 @@ private:
     atomic<bool> is_running;
     string username;
     char host[_POSIX_HOST_NAME_MAX];
+    string home_directory;
     
     void Print();
-    void process_input(const string& input);
+    void process_input(char *input);
     static void signal_handler(int signum);
 
-    // Parser parser;
+    Parser *parser;
     // CommandHandler handler;
     History history;
     // Terminal terminal;

@@ -1,20 +1,23 @@
 #pragma once
 
 #include <iostream>
-#include <string>
-#include <vector>
 
 using namespace std;
 
 class Command {
 public:
-    string name;
-    vector<string> argv;
+    char *name;
+    char **argv;
 
-    string inputFile;
-    string outputFile;
-
-    string errorFile;
+    char *inputFile;
+    char *outputFile;
+    char *errorFile;
 
     bool appendOutput;
+    bool pipeToNext;
+
+    Command();
+    Command(const Command& other);
+    Command& operator=(const Command& other);
+    ~Command();
 };
