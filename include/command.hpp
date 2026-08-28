@@ -17,7 +17,6 @@ public:
     bool pipeToNext;
 
     Command();
-    Command(const Command& other);
-    Command& operator=(const Command& other);
+    Command(char *commandName, char **arguments);
     ~Command();
 };

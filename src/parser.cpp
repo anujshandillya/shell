@@ -8,73 +8,56 @@ Command **Parser::parse(char *input) {
         return nullptr;
     }
 
+    // command count
     int commandCount = 1;
-
     for (int i = 0; input[i] != '\0'; i++) {
         if (input[i] == '|' || input[i] == ';') {
             commandCount++;
         }
     }
+    char **commands = new char*[commandCount + 1];
+    Command **commandObjects = new Command*[commandCount + 1];
+    int idx = 0;
 
-    Command **commands = new Command*[commandCount + 1];
-
-    int commandIndex = 0;
-    char *start = input;
-
-    for (int i = 0;; i++) {
-        char separator = input[i];
-
-        if (separator != '|' && separator != ';' && separator != '\0') {
-            continue;
-        }
-
-        input[i] = '\0';
-
-        char *save = nullptr;
-        char *argument = strtok_r(start, " \t\n", &save);
-
-        if (argument != nullptr) {
-            Command *command = new Command();
-
-            int argumentCount = 1;
-            char *scan = argument;
-
-            while ((scan = strtok_r(nullptr, " \t\n", &save)) != nullptr) {
-                argumentCount++;
-            }
-
-            command->argv = new char*[argumentCount + 1];
-
-            save = nullptr;
-            argument = strtok_r(start, " \t\n", &save);
-
-            int argumentIndex = 0;
-
-            while (argument != nullptr) {
-                command->argv[argumentIndex] = strdup(argument);
-
-                if (argumentIndex == 0) {
-                    command->name = strdup(argument);
-                }
-
-                argumentIndex++;
-                argument = strtok_r(nullptr, " \t\n", &save);
-            }
-
-            command->argv[argumentCount] = nullptr;
-            command->pipeToNext = separator == '|';
-
-            commands[commandIndex] = command;
-            commandIndex++;
-        }
-
-        if (separator == '\0') {
-            break;
-        }
-
-        start = input + i + 1;
+    // separate the commands by the pipe symbol '|' and ';'
+    char *command = strtok(input, "|;");
+    commands[idx++] = command;
+    while ((command = strtok(nullptr, "|;")) != nullptr) {
+        commands[idx++] = command;
     }
 
-    commands[commandIndex] = nullptr;
-    return commands;
+    commands[idx] = nullptr;
+
+    int objCount = 0;   // tracks how many Command* we've actually stored
+
+    for (int i = 0; commands[i] != nullptr; i++) {
+        char *cmd = commands[i];
+        char *cmdCopy = strdup(cmd);
+        char *token = strtok(cmdCopy, " \t");
+        if (token == nullptr) {
+            free(cmdCopy);
+            continue;
+        }
+        char *commandName = strdup(token);
+        int argCount = 0;
+        while ((token = strtok(nullptr, " \t")) != nullptr) {
+            argCount++;
+        }
+        free(cmdCopy);   // done with cmdCopy, was only needed for counting
+
+        char **arguments = new char*[argCount + 2];   // name + args + null
+        arguments[0] = commandName;
+        int argIdx = 1;   // renamed from reusing `idx`
+        token = strtok(cmd, " \t");
+        while ((token = strtok(nullptr, " \t")) != nullptr) {
+            arguments[argIdx++] = strdup(token);
+        }
+        arguments[argIdx] = nullptr;
+
+        Command *commandObj = new Command(commandName, arguments);
+        commandObjects[objCount++] = commandObj;
+    }
+
+    commandObjects[objCount] = nullptr;   // was commandObjects[idx]
+    return commandObjects;
 }

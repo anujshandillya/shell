@@ -10,7 +10,10 @@
 
 using namespace std;
 
-void freeCommands(Command **commands) {
+volatile sig_atomic_t Shell::is_running = true;
+volatile sig_atomic_t Shell::is_processing_command = false;
+
+void freeCommands(char **commands) {
     if (commands == nullptr) {
         return;
     }
@@ -22,7 +25,7 @@ void freeCommands(Command **commands) {
     delete[] commands;
 }
 
-Shell::Shell() : is_running(true) {
+Shell::Shell() {
     cout << "Running...\n";
     signal(SIGINT, signal_handler);
     const char* user = getenv("USER");
@@ -45,35 +48,43 @@ void Shell::Print() {
 }
 
 void Shell::signal_handler(int signum) {
-    cout << "Closing Shell...";
     cout.flush();
-    // Shell::is_running = false;
+    if(Shell::is_processing_command) {
+        cout << "\nCommand processing interrupted. Press Ctrl+C again to exit.\n";
+        Shell::is_processing_command = false;
+        return;
+    }
+    Shell::is_running = false;
+    exit(signum);
 }
 
 void Shell::process_input(char *input) {
     char *inputCopy = strdup(input);
     Command **parsedCommands = parser->parse(input);
 
-    if (parsedCommands != nullptr) {
-        for (int i = 0; parsedCommands[i] != nullptr; i++) {
-            Command *command = parsedCommands[i];
-
-            if(command->pipeToNext) {
-                // connect stdout of this command to stdin of the next command.
-                cout << command->name << " will pipe to next command." << endl;
-            }else {
-                // Execute the command
-                cout << command->name << " will execute." << endl;
-            }
-        }
-
-        freeCommands(parsedCommands);
+    if(parsedCommands == nullptr) {
+        free(inputCopy);
+        return;
     }
 
+    for (int i = 0; parsedCommands[i] != nullptr; i++) {
+        Command *cmd = parsedCommands[i];
+        
+        printf("Command %d: %s\n", i + 1, cmd->name);
+        // free(command);
+    }
+
+    // freeCommands(parsedCommands);
+
     Shell::history.add(inputCopy);
-    if(strcmp(input, "exit") == 0) {
+
+    bool shouldExit = (strcmp(input, "exit") == 0);
+
+    delete[] parsedCommands; // free array of pointers
+    free(inputCopy);
+
+    if (shouldExit) {
         Shell::is_running = false;
-        return;
     }
 }
 
@@ -84,9 +95,15 @@ void Shell::run() {
 
         if (fgets(input, sizeof(input), stdin) != NULL) {
             input[strcspn(input, "\n")] = '\0';   
+        }else {
+            cout.flush();
+            break;
         }
-
+        
         cout << "You entered: " << input << endl;
+        is_processing_command = true;
         Shell::process_input(input);
+        sleep(10); // Simulate a delay for testing signal handling
+        is_processing_command = false;
     }
 }
