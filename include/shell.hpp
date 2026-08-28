@@ -15,8 +15,9 @@ public:
     Shell();
     void run();
     ~Shell();
-private:
-    atomic<bool> is_running;
+    private:
+    static volatile sig_atomic_t is_running;
+    static volatile sig_atomic_t is_processing_command;
     string username;
     char host[_POSIX_HOST_NAME_MAX];
     string home_directory;
