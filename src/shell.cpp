@@ -29,22 +29,57 @@ Shell::Shell() {
     cout << "Running...\n";
     signal(SIGINT, signal_handler);
     const char* user = getenv("USER");
-    username = user;
+    if (user != nullptr) {
+        username = user;
+    } else {
+        username = "user";
+    }
     
     if(gethostname(Shell::host, sizeof(Shell::host)) != 0) {
         strncpy(Shell::host, "localhost", sizeof(Shell::host));
     }
-    Shell::home_directory = "~";
+
+    char root[PATH_MAX];
+    if (getcwd(root, sizeof(root)) != nullptr) {
+        Shell::current_directory = root;
+    } else {
+        Shell::current_directory = "";
+    }
+
     Shell::parser = new Parser();
+    Shell::handler = new CommandHandler();
 }
 
 Shell::~Shell() {
     delete parser;
+    delete handler;
 }
 
 void Shell::Print() {
-    cout << "<" << Shell::username << "@" << Shell::host << ":~> ";
-    cout.flush();    
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)) == nullptr) {
+        strcpy(cwd, "?");
+    } else {
+        const char *root = Shell::current_directory.c_str();
+        size_t root_len = strlen(root);
+
+        if (root_len > 0) {
+            if (strcmp(cwd, root) == 0) {
+                strcpy(cwd, "~");
+            } else if (strncmp(cwd, root, root_len) == 0 && (root[root_len - 1] == '/' || cwd[root_len] == '/')) {
+                char temp[PATH_MAX];
+                if (strcmp(root, "/") == 0) {
+                    snprintf(temp, sizeof(temp), "~%s", cwd);
+                } else {
+                    snprintf(temp, sizeof(temp), "~%s", cwd + root_len);
+                }
+                strncpy(cwd, temp, sizeof(cwd) - 1);
+                cwd[sizeof(cwd) - 1] = '\0';
+            }
+        }
+    }
+    printf("<%s@%s:%s> ", Shell::username.c_str(), Shell::host, cwd);
+    cout.flush();
 }
 
 void Shell::signal_handler(int signum) {
@@ -71,6 +106,8 @@ void Shell::process_input(char *input) {
         Command *cmd = parsedCommands[i];
         
         printf("Command %d: %s\n", i + 1, cmd->name);
+
+        handler->execute(*cmd);
         // free(command);
     }
 
@@ -103,7 +140,7 @@ void Shell::run() {
         cout << "You entered: " << input << endl;
         is_processing_command = true;
         Shell::process_input(input);
-        sleep(10); // Simulate a delay for testing signal handling
+        // sleep(10); // Simulate a delay for testing signal handling
         is_processing_command = false;
     }
 }
