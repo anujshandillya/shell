@@ -5,6 +5,7 @@
 Command::Command() {
     name = nullptr;
     argv = nullptr;
+    argc = 0;
     inputFile = nullptr;
     outputFile = nullptr;
     errorFile = nullptr;
@@ -13,9 +14,10 @@ Command::Command() {
     pipeToNext = false;
 }
 
-Command::Command(char *commandName, char **arguments) {
+Command::Command(char *commandName, char **arguments, int argumentCount) {
     name = strdup(commandName);
     argv = arguments;
+    argc = argumentCount;
     inputFile = nullptr;
     outputFile = nullptr;
     errorFile = nullptr;

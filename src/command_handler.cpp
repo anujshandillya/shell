@@ -33,15 +33,51 @@ void CommandHandler::execute(const Command& command) {
 
 // cd
 void CommandHandler::cd(const Command& command) {
+    if(command.argc > 2) {
+        perror("Invalid Arguments");
+        return;
+    }
     cout << "Executing cd command" << endl;
-    const char* path = command.argv[1];
+    char* path = command.argv[1];
 
     if (path == nullptr) {
         path = getenv("HOME");
     }
-    if(chdir(path) != 0) {
-        perror("cd failed");
+
+    if (path == nullptr || strcmp(path, "~") == 0 || strcmp(path, "") == 0) {
+        path = getenv("HOME");
+        if (path == nullptr) {
+            perror("HOME not set");
+            return;
+        }
+    } else if (strcmp(path, "-") == 0) {
+        path = getenv("OLDPWD");
+        if (path == nullptr) {
+            perror("OLDPWD not set");
+            return;
+        }
+        printf("OLDPWD: %s\n", path);
     }
+    
+    char target[PATH_MAX];
+    strncpy(target, path, sizeof(target) - 1);
+    target[sizeof(target) - 1] = '\0';
+
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)) == nullptr) {
+        perror("getcwd() error");
+        return;
+    }
+
+    printf("Changing directory to: %s\n", target);
+
+    if (chdir(target) != 0) {
+        perror("cd failed");
+        return;
+    }
+
+    setenv("OLDPWD", cwd, 1);
+    printf("OLDPWD set to: %s\n", cwd);
 }
 
 // ls

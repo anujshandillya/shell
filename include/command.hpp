@@ -8,6 +8,7 @@ class Command {
 public:
     char *name;
     char **argv;
+    int argc;
 
     char *inputFile;
     char *outputFile;
@@ -17,6 +18,6 @@ public:
     bool pipeToNext;
 
     Command();
-    Command(char *commandName, char **arguments);
+    Command(char *commandName, char **arguments, int argumentCount);
     ~Command();
 };

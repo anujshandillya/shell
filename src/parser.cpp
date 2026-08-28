@@ -54,7 +54,7 @@ Command **Parser::parse(char *input) {
         }
         arguments[argIdx] = nullptr;
 
-        Command *commandObj = new Command(commandName, arguments);
+        Command *commandObj = new Command(commandName, arguments, argCount + 1);   // +1 for the command name
         commandObjects[objCount++] = commandObj;
     }
 
