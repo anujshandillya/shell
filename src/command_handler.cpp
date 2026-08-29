@@ -379,5 +379,80 @@ void CommandHandler::pinfo(const Command& command) {
 // echo
 void CommandHandler::echo(const Command& command) {
     printf("Executing %s command\n", command.name);
-    return;
+
+    bool n_flag = false;   // -n : suppress trailing newline
+    bool e_flag = false;   // -e : interpret backslash escapes (\n, \t, etc.)
+    int startIdx = 1;
+
+    // Parse leading flags only (real echo stops flag-parsing at the first non-flag arg)
+    for (int i = 1; command.argv[i] != nullptr; i++) {
+        char* arg = command.argv[i];
+
+        if (strcmp(arg, "-n") == 0) {
+            n_flag = true;
+            startIdx = i + 1;
+        } else if (strcmp(arg, "-e") == 0) {
+            e_flag = true;
+            startIdx = i + 1;
+        } else if (strcmp(arg, "-ne") == 0 || strcmp(arg, "-en") == 0) {
+            n_flag = true;
+            e_flag = true;
+            startIdx = i + 1;
+        } else {
+            break; // first non-flag token: stop parsing flags
+        }
+    }
+
+    // Build the output string
+    char outBuf[4096];
+    size_t outLen = 0;
+    outBuf[0] = '\0';
+
+    for (int i = startIdx; command.argv[i] != nullptr; i++) {
+        char* arg = command.argv[i];
+
+        if (i > startIdx && outLen < sizeof(outBuf) - 1) {
+            outBuf[outLen++] = ' ';
+        }
+
+        for (size_t j = 0; arg[j] != '\0' && outLen < sizeof(outBuf) - 1; j++) {
+            if (e_flag && arg[j] == '\\' && arg[j + 1] != '\0') {
+                char next = arg[j + 1];
+                char resolved = '\0';
+                bool handled = true;
+
+                switch (next) {
+                    case 'n': resolved = '\n'; break;
+                    case 't': resolved = '\t'; break;
+                    case '\\': resolved = '\\'; break;
+                    case 'r': resolved = '\r'; break;
+                    default: handled = false; break;
+                }
+
+                if (handled) {
+                    outBuf[outLen++] = resolved;
+                    j++; // skip the escaped char
+                    continue;
+                }
+            }
+            outBuf[outLen++] = arg[j];
+        }
+    }
+
+    if (!n_flag && outLen < sizeof(outBuf) - 1) {
+        outBuf[outLen++] = '\n';
+    }
+    outBuf[outLen] = '\0';
+
+    // Write using raw syscall, not stdio
+    ssize_t written = 0;
+    ssize_t total = 0;
+    while (total < (ssize_t)outLen &&
+           (written = write(STDOUT_FILENO, outBuf + total, outLen - total)) > 0) {
+        total += written;
+    }
+
+    if (written < 0) {
+        perror("echo: write failed");
+    }
 }
