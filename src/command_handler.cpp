@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <grp.h>
 #include <pwd.h>
+#include <fcntl.h>
 
 using namespace std;
 
@@ -242,9 +243,137 @@ void CommandHandler::history(const Command& command) {
 }
 
 // pinfo
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#include <libproc.h>
+#endif
+
 void CommandHandler::pinfo(const Command& command) {
-    printf("Executing %s command\n", command.name);
-    return;
+    if (command.argc > 2) {
+        perror("Invalid Arguments");
+        return;
+    }
+
+    pid_t pid;
+    if (command.argv[1] == nullptr) {
+        pid = getpid();
+    } else {
+        char* endptr;
+        long val = strtol(command.argv[1], &endptr, 10);
+        if (*endptr != '\0' || val <= 0) {
+            printf("ps: invalid process id: %s\n", command.argv[1]);
+            return;
+        }
+        pid = (pid_t)val;
+    }
+
+#ifdef __APPLE__
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+    struct kinfo_proc kp;
+    size_t len = sizeof(kp);
+
+    if (sysctl(mib, 4, &kp, &len, nullptr, 0) != 0 || len == 0) {
+        printf("ps: no such process: %d\n", pid);
+        return;
+    }
+
+    char state = '?';
+    switch (kp.kp_proc.p_stat) {
+        case SRUN:    state = 'R'; break;
+        case SSLEEP:  state = 'S'; break;
+        case SSTOP:   state = 'T'; break;
+        case SZOMB:   state = 'Z'; break;
+        case SIDL:    state = 'I'; break;
+        default:      state = '?'; break;
+    }
+
+    pid_t pgrp = kp.kp_eproc.e_pgid;
+    bool isForeground = false;
+    pid_t termPgrp = tcgetpgrp(STDIN_FILENO);
+    if (termPgrp != -1 && termPgrp == pgrp) {
+        isForeground = true;
+    }
+
+    char stateStr[4];
+    snprintf(stateStr, sizeof(stateStr), "%c%s", state, isForeground ? "+" : "");
+
+    // ---- 2. Memory via proc_pidinfo ----
+    struct proc_taskinfo taskInfo;
+    long vmSizeKb = -1;
+    if (proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, sizeof(taskInfo)) > 0) {
+        vmSizeKb = (long)(taskInfo.pti_virtual_size / 1024); // bytes -> KB
+    }
+
+    char exeResolved[PATH_MAX];
+    if (proc_pidpath(pid, exeResolved, sizeof(exeResolved)) <= 0) {
+        strncpy(exeResolved, "?", sizeof(exeResolved));
+    }
+
+    printf("Process Status -- %s\n", stateStr);
+    if (vmSizeKb != -1) {
+        printf("memory -- %ld {Virtual Memory}\n", vmSizeKb);
+    } else {
+        printf("memory -- ? {Virtual Memory}\n");
+    }
+    printf("Executable Path -- %s\n", exeResolved);
+
+#else
+    char statPath[64];
+    snprintf(statPath, sizeof(statPath), "/proc/%d/stat", pid);
+
+    char statBuf[512];
+    if (readFileRaw(statPath, statBuf, sizeof(statBuf)) < 0) {
+        printf("ps: no such process: %d\n", pid);
+        return;
+    }
+
+    char* closeParen = strrchr(statBuf, ')');
+    char state = '?';
+    pid_t pgrp = -1;
+    if (closeParen != nullptr) {
+        sscanf(closeParen + 2, " %c %*d %d", &state, &pgrp);
+    }
+
+    bool isForeground = false;
+    pid_t termPgrp = tcgetpgrp(STDIN_FILENO);
+    if (termPgrp != -1 && pgrp != -1 && termPgrp == pgrp) {
+        isForeground = true;
+    }
+
+    char stateStr[4];
+    snprintf(stateStr, sizeof(stateStr), "%c%s", state, isForeground ? "+" : "");
+
+    char statusPath[64];
+    snprintf(statusPath, sizeof(statusPath), "/proc/%d/status", pid);
+
+    char statusBuf[4096];
+    long vmSizeKb = -1;
+    if (readFileRaw(statusPath, statusBuf, sizeof(statusBuf)) > 0) {
+        char* line = strstr(statusBuf, "VmSize:");
+        if (line != nullptr) {
+            sscanf(line + 7, "%ld", &vmSizeKb);
+        }
+    }
+
+    char exePath[64];
+    snprintf(exePath, sizeof(exePath), "/proc/%d/exe", pid);
+
+    char exeResolved[PATH_MAX];
+    ssize_t len2 = readlink(exePath, exeResolved, sizeof(exeResolved) - 1);
+    if (len2 != -1) {
+        exeResolved[len2] = '\0';
+    } else {
+        strncpy(exeResolved, "?", sizeof(exeResolved));
+    }
+
+    printf("Process Status -- %s\n", stateStr);
+    if (vmSizeKb != -1) {
+        printf("memory -- %ld {Virtual Memory}\n", vmSizeKb);
+    } else {
+        printf("memory -- ? {Virtual Memory}\n");
+    }
+    printf("Executable Path -- %s\n", exeResolved);
+#endif
 }
 
 // echo
