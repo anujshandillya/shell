@@ -33,6 +33,7 @@ void CommandHandler::execute(const Command& command) {
 
 // cd
 void CommandHandler::cd(const Command& command) {
+    printf("Executing %s command\n", command.name);
     if(command.argc > 2) {
         perror("Invalid Arguments");
         return;
@@ -89,7 +90,19 @@ void CommandHandler::ls(const Command& command) {
 // pwd
 void CommandHandler::pwd(const Command& command) {
     printf("Executing %s command\n", command.name);
-    return;
+
+    if (command.argc > 1) {
+        perror("Invalid Arguments");
+        return;
+    }
+
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd)) == nullptr) {
+        perror("getcwd() error");
+        return;
+    }
+
+    printf("%s\n", cwd);
 }
 
 // cat
