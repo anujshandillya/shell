@@ -47,6 +47,8 @@ Shell::Shell() {
         Shell::current_directory = "";
     }
 
+    setenv("HISFILE", "/Users/anujsharma/Developer/shell/.anujsh", 1);
+
     Shell::parser = new Parser();
     Shell::handler = new CommandHandler();
 }
