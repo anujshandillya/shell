@@ -219,15 +219,144 @@ void CommandHandler::pwd(const Command& command) {
 }
 
 // cat
+static void catStream(int fd, bool n_flag) {
+    char buf[4096];
+    ssize_t bytesRead;
+    long lineNum = 1;
+    bool atLineStart = true;
+
+    while ((bytesRead = read(fd, buf, sizeof(buf))) > 0) {
+        if (!n_flag) {
+            // Fast path: just pass bytes through
+            ssize_t total = 0, written;
+            while (total < bytesRead &&
+                   (written = write(STDOUT_FILENO, buf + total, bytesRead - total)) > 0) {
+                total += written;
+            }
+            write(STDOUT_FILENO, "\n", 1);
+            continue;
+        }
+
+        // -n path: prefix each line with its line number
+        for (ssize_t i = 0; i < bytesRead; i++) {
+            if (atLineStart) {
+                char numBuf[32];
+                int numLen = snprintf(numBuf, sizeof(numBuf), "%6ld\t", lineNum);
+                write(STDOUT_FILENO, numBuf, numLen);
+                atLineStart = false;
+            }
+
+            write(STDOUT_FILENO, &buf[i], 1);
+
+            if (buf[i] == '\n') {
+                lineNum++;
+                atLineStart = true;
+            }
+        }
+        write(STDOUT_FILENO, "\n", 1);
+    }
+
+    if (bytesRead == -1) {
+        perror("cat: read error");
+    }
+}
+
 void CommandHandler::cat(const Command& command) {
     printf("Executing %s command\n", command.name);
-    return;
+
+    bool n_flag = false; // -n : number output lines
+    char* files[256];
+    int fileCount = 0;
+
+    for (int i = 1; command.argv[i] != nullptr; i++) {
+        char* arg = command.argv[i];
+
+        if (strcmp(arg, "-n") == 0) {
+            n_flag = true;
+        } else if (arg[0] == '-' && arg[1] != '\0') {
+            printf("cat: invalid option -- '%s'\n", arg);
+        } else {
+            if (fileCount < 256) {
+                files[fileCount++] = arg;
+            }
+        }
+    }
+
+    if (fileCount == 0) {
+        catStream(STDIN_FILENO, n_flag);
+        return;
+    }
+
+    for (int i = 0; i < fileCount; i++) {
+        int fd = open(files[i], O_RDONLY);
+        if (fd == -1) {
+            perror(files[i]);
+            continue; // skip this file, keep processing the rest
+        }
+
+        catStream(fd, n_flag);
+        close(fd);
+    }
 }
 
 // search
+static bool searchRecursive(const char* dirPath, const char* target) {
+    DIR* dir = opendir(dirPath);
+    if (dir == nullptr) {
+        return false; // can't open this dir (permissions, etc.) — just skip it
+    }
+
+    struct dirent* entry;
+    bool found = false;
+
+    while (!found && (entry = readdir(dir)) != nullptr) {
+        // Skip "." and ".." to avoid infinite recursion
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Match by name, regardless of whether it's a file or directory
+        if (strcmp(entry->d_name, target) == 0) {
+            found = true;
+            break;
+        }
+
+        // Build full path for recursion
+        char fullPath[PATH_MAX];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", dirPath, entry->d_name);
+
+        struct stat st;
+        // Use lstat (not stat) so we don't follow symlinks — avoids infinite
+        // loops from symlinked directories that point back up the tree
+        if (lstat(fullPath, &st) != 0) {
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (searchRecursive(fullPath, target)) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    closedir(dir);
+    return found;
+}
+
 void CommandHandler::search(const Command& command) {
     printf("Executing %s command\n", command.name);
-    return;
+
+    if (command.argc != 2) {
+        perror("search: usage: search <name>\n");
+        return;
+    }
+
+    const char* target = command.argv[1];
+
+    bool result = searchRecursive(".", target);
+
+    printf("%s\n", result ? "True" : "False");
 }
 
 // grep
@@ -239,7 +368,100 @@ void CommandHandler::grep(const Command& command) {
 // history
 void CommandHandler::history(const Command& command) {
     printf("Executing %s command\n", command.name);
-    return;
+
+    const char* historyFilePath = getenv("HISFILE");
+
+    bool clear_flag = false;
+    long limit = -1; // -1 means "show all"
+
+    for (int i = 1; command.argv[i] != nullptr; i++) {
+        char* arg = command.argv[i];
+
+        if (strcmp(arg, "-c") == 0) {
+            clear_flag = true;
+        } else if (arg[0] >= '0' && arg[0] <= '9') {
+            char* endptr;
+            long val = strtol(arg, &endptr, 10);
+            if (*endptr == '\0' && val > 0) {
+                limit = val;
+            } else {
+                printf("history: invalid argument -- '%s'\n", arg);
+            }
+        } else {
+            printf("history: invalid option -- '%s'\n", arg);
+        }
+    }
+
+    if (clear_flag) {
+        int fd = open(historyFilePath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+        if (fd == -1) {
+            perror("history: failed to clear");
+            return;
+        }
+        close(fd);
+        printf("History cleared.\n");
+        return;
+    }
+
+    // ---- Read entire history file into memory ----
+    int fd = open(historyFilePath, O_RDONLY);
+    if (fd == -1) {
+        perror("history: no history file");
+        return;
+    }
+
+    char buf[65536]; // NOTE: buffer implementation later
+    size_t totalRead = 0;
+    ssize_t n;
+    while (totalRead < sizeof(buf) - 1 &&
+           (n = read(fd, buf + totalRead, sizeof(buf) - 1 - totalRead)) > 0) {
+        totalRead += n;
+    }
+    close(fd);
+
+    if (n == -1) {
+        perror("history: read error");
+        return;
+    }
+
+    buf[totalRead] = '\0';
+
+    // ---- Split into lines, count total first (needed for -n / limit) ----
+    long totalLines = 0;
+    for (size_t i = 0; i < totalRead; i++) {
+        if (buf[i] == '\n') {
+            totalLines++;
+        }
+    }
+    // handle trailing line with no final newline
+    if (totalRead > 0 && buf[totalRead - 1] != '\n') {
+        totalLines++;
+    }
+
+    long startLine = 1;
+    if (limit != -1 && limit < totalLines) {
+        startLine = totalLines - limit + 1;
+    }
+
+    // ---- Walk through lines, print from startLine onward ----
+    long currentLine = 1;
+    size_t lineStart = 0;
+
+    for (size_t i = 0; i <= totalRead; i++) {
+        if (i == totalRead || buf[i] == '\n') {
+            if (i > lineStart || i == totalRead) { // has content (skip trailing empty)
+                if (currentLine >= startLine && i > lineStart) {
+                    char numBuf[16];
+                    int numLen = snprintf(numBuf, sizeof(numBuf), "%5ld  ", currentLine);
+                    write(STDOUT_FILENO, numBuf, numLen);
+                    write(STDOUT_FILENO, buf + lineStart, i - lineStart);
+                    write(STDOUT_FILENO, "\n", 1);
+                }
+                currentLine++;
+            }
+            lineStart = i + 1;
+        }
+    }
 }
 
 // pinfo
