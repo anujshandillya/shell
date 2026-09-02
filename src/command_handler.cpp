@@ -9,6 +9,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <fcntl.h>
+#include <regex.h>
 
 using namespace std;
 
@@ -19,12 +20,8 @@ void CommandHandler::execute(const Command& command) {
         ls(command);
     } else if (strcmp(command.name, "pwd") == 0) {
         pwd(command);
-    } else if (strcmp(command.name, "cat") == 0) {
-        cat(command);
     } else if (strcmp(command.name, "search") == 0) {
         search(command);
-    } else if (strcmp(command.name, "grep") == 0) {
-        grep(command);
     } else if (strcmp(command.name, "history") == 0) {
         history(command);
     } else if (strcmp(command.name, "pinfo") == 0) {
@@ -39,7 +36,6 @@ void CommandHandler::execute(const Command& command) {
 
 // cd
 void CommandHandler::cd(const Command& command) {
-    printf("Executing %s command\n", command.name);
     if(command.argc > 2) {
         perror("Invalid Arguments");
         return;
@@ -88,7 +84,6 @@ void CommandHandler::cd(const Command& command) {
 }
 
 // ls
-
 static void printPermissions(mode_t mode) {
     char perms[11];
     perms[0] = S_ISDIR(mode) ? 'd' : (S_ISLNK(mode) ? 'l' : '-');
@@ -162,7 +157,6 @@ static void listOneDirectory(const char* dirPath, bool a_flag, bool l_flag, bool
 }
 
 void CommandHandler::ls(const Command& command) {
-    printf("Executing %s command\n", command.name);
 
     bool a_flag = false, l_flag = false;
 
@@ -202,7 +196,6 @@ void CommandHandler::ls(const Command& command) {
 
 // pwd
 void CommandHandler::pwd(const Command& command) {
-    printf("Executing %s command\n", command.name);
 
     if (command.argc > 1) {
         perror("Invalid Arguments");
@@ -216,87 +209,6 @@ void CommandHandler::pwd(const Command& command) {
     }
 
     printf("%s\n", cwd);
-}
-
-// cat
-static void catStream(int fd, bool n_flag) {
-    char buf[4096];
-    ssize_t bytesRead;
-    long lineNum = 1;
-    bool atLineStart = true;
-
-    while ((bytesRead = read(fd, buf, sizeof(buf))) > 0) {
-        if (!n_flag) {
-            // Fast path: just pass bytes through
-            ssize_t total = 0, written;
-            while (total < bytesRead &&
-                   (written = write(STDOUT_FILENO, buf + total, bytesRead - total)) > 0) {
-                total += written;
-            }
-            write(STDOUT_FILENO, "\n", 1);
-            continue;
-        }
-
-        // -n path: prefix each line with its line number
-        for (ssize_t i = 0; i < bytesRead; i++) {
-            if (atLineStart) {
-                char numBuf[32];
-                int numLen = snprintf(numBuf, sizeof(numBuf), "%6ld\t", lineNum);
-                write(STDOUT_FILENO, numBuf, numLen);
-                atLineStart = false;
-            }
-
-            write(STDOUT_FILENO, &buf[i], 1);
-
-            if (buf[i] == '\n') {
-                lineNum++;
-                atLineStart = true;
-            }
-        }
-        write(STDOUT_FILENO, "\n", 1);
-    }
-
-    if (bytesRead == -1) {
-        perror("cat: read error");
-    }
-}
-
-void CommandHandler::cat(const Command& command) {
-    printf("Executing %s command\n", command.name);
-
-    bool n_flag = false; // -n : number output lines
-    char* files[256];
-    int fileCount = 0;
-
-    for (int i = 1; command.argv[i] != nullptr; i++) {
-        char* arg = command.argv[i];
-
-        if (strcmp(arg, "-n") == 0) {
-            n_flag = true;
-        } else if (arg[0] == '-' && arg[1] != '\0') {
-            printf("cat: invalid option -- '%s'\n", arg);
-        } else {
-            if (fileCount < 256) {
-                files[fileCount++] = arg;
-            }
-        }
-    }
-
-    if (fileCount == 0) {
-        catStream(STDIN_FILENO, n_flag);
-        return;
-    }
-
-    for (int i = 0; i < fileCount; i++) {
-        int fd = open(files[i], O_RDONLY);
-        if (fd == -1) {
-            perror(files[i]);
-            continue; // skip this file, keep processing the rest
-        }
-
-        catStream(fd, n_flag);
-        close(fd);
-    }
 }
 
 // search
@@ -345,7 +257,6 @@ static bool searchRecursive(const char* dirPath, const char* target) {
 }
 
 void CommandHandler::search(const Command& command) {
-    printf("Executing %s command\n", command.name);
 
     if (command.argc != 2) {
         perror("search: usage: search <name>\n");
@@ -359,15 +270,8 @@ void CommandHandler::search(const Command& command) {
     printf("%s\n", result ? "True" : "False");
 }
 
-// grep
-void CommandHandler::grep(const Command& command) {
-    printf("Executing %s command\n", command.name);
-    return;
-}
-
 // history
 void CommandHandler::history(const Command& command) {
-    printf("Executing %s command\n", command.name);
 
     const char* historyFilePath = getenv("HISFILE");
 
@@ -600,7 +504,6 @@ void CommandHandler::pinfo(const Command& command) {
 
 // echo
 void CommandHandler::echo(const Command& command) {
-    printf("Executing %s command\n", command.name);
 
     bool n_flag = false;   // -n : suppress trailing newline
     bool e_flag = false;   // -e : interpret backslash escapes (\n, \t, etc.)
