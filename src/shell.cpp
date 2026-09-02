@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <csignal>
+#include <termios.h>
 #include <unistd.h>
 #include <cstdlib>
 
@@ -125,22 +126,143 @@ void Shell::process_input(char *input) {
     }
 }
 
+struct termios origTermios;
+
+void Shell::enableRawMode() {
+    tcgetattr(STDIN_FILENO, &origTermios);
+    struct termios raw = origTermios;
+    raw.c_lflag &= ~(ICANON | ECHO); // disable line buffering AND default echo
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void Shell::disableRawMode() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+}
+
+void Shell::readLine(char* buf, size_t bufSize) {
+    size_t len = 0;        // total chars in buffer
+    size_t cursorPos = 0;  // where the cursor currently is
+    buf[0] = '\0';
+
+    while (true) {
+        char c;
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n <= 0) {
+            buf[len] = '\0';
+            return;
+        }
+
+        if (c == '\t') {
+            // Handle tab autocompletion
+            // handleTabCompletion(buf, len, bufSize);
+            continue;
+        }
+
+        if (c == '\n' || c == '\r') {
+            write(STDOUT_FILENO, "\n", 1);
+            break;
+        }
+
+        // ---- Backspace: delete char BEFORE cursor ----
+        if (c == 127 || c == '\b') {
+            if (cursorPos > 0) {
+                // shift everything right of cursor one slot left
+                memmove(buf + cursorPos - 1, buf + cursorPos, len - cursorPos);
+                len--;
+                cursorPos--;
+                buf[len] = '\0';
+
+                // redraw: move cursor back, reprint tail, erase leftover char, reposition
+                write(STDOUT_FILENO, "\b", 1);
+                write(STDOUT_FILENO, buf + cursorPos, len - cursorPos);
+                write(STDOUT_FILENO, " ", 1); // clear the now-stale trailing char
+                // move cursor back to correct position (tail length + 1 for the space)
+                for (size_t i = 0; i < len - cursorPos + 1; i++) {
+                    write(STDOUT_FILENO, "\b", 1);
+                }
+            }
+            continue;
+        }
+
+        // ---- Escape sequences: arrow keys, Delete key ----
+        if (c == 27) { // ESC
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+
+            if (seq[0] == '[') {
+                if (seq[1] == 'C') { // Right arrow
+                    if (cursorPos < len) {
+                        write(STDOUT_FILENO, buf + cursorPos, 1);
+                        cursorPos++;
+                    }
+                    continue;
+                }
+                if (seq[1] == 'D') { // Left arrow
+                    if (cursorPos > 0) {
+                        cursorPos--;
+                        write(STDOUT_FILENO, "\b", 1);
+                    }
+                    continue;
+                }
+                if (seq[1] == '3') { // Delete key: ESC [ 3 ~
+                    char tilde;
+                    if (read(STDIN_FILENO, &tilde, 1) == 1 && tilde == '~') {
+                        if (cursorPos < len) {
+                            // shift everything right of cursor one slot left
+                            memmove(buf + cursorPos, buf + cursorPos + 1, len - cursorPos - 1);
+                            len--;
+                            buf[len] = '\0';
+
+                            // redraw tail, clear stale trailing char, move cursor back
+                            write(STDOUT_FILENO, buf + cursorPos, len - cursorPos);
+                            write(STDOUT_FILENO, " ", 1);
+                            for (size_t i = 0; i < len - cursorPos + 1; i++) {
+                                write(STDOUT_FILENO, "\b", 1);
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            continue; // unrecognized escape sequence
+        }
+
+        // ---- Normal printable character: insert at cursor ----
+        if (len < bufSize - 1) {
+            // shift everything right of cursor one slot right to make room
+            memmove(buf + cursorPos + 1, buf + cursorPos, len - cursorPos);
+            buf[cursorPos] = c;
+            len++;
+            cursorPos++;
+            buf[len] = '\0';
+
+            // redraw from cursor's old position onward, then reposition cursor
+            write(STDOUT_FILENO, buf + cursorPos - 1, len - (cursorPos - 1));
+            for (size_t i = 0; i < len - cursorPos; i++) {
+                write(STDOUT_FILENO, "\b", 1);
+            }
+        }
+    }
+
+    buf[len] = '\0';
+}
 void Shell::run() {
+    enableRawMode();
+
     while (is_running) {
         Print();
         char input[1024];
 
-        if (fgets(input, sizeof(input), stdin) != NULL) {
-            input[strcspn(input, "\n")] = '\0';   
-        }else {
-            cout.flush();
-            break;
-        }
-        
+        readLine(input, sizeof(input));
+
         cout << "You entered: " << input << endl;
         is_processing_command = true;
         Shell::process_input(input);
-        // sleep(10); // Simulate a delay for testing signal handling
         is_processing_command = false;
     }
+
+    disableRawMode();
 }

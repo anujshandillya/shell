@@ -25,6 +25,9 @@ public:
     void Print();
     void process_input(char *input);
     static void signal_handler(int signum);
+    void enableRawMode();
+    void disableRawMode();
+    void readLine(char* buf, size_t bufSize);
 
     Parser *parser;
     CommandHandler *handler;
