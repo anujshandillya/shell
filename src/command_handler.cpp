@@ -10,10 +10,80 @@
 #include <pwd.h>
 #include <fcntl.h>
 #include <regex.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 using namespace std;
+struct SavedFds {
+    int savedStdout = -1;
+    int savedStdin  = -1;
+    int savedStderr = -1;
+};
+
+
+int CommandHandler::lastExitStatus = 0;
+
+static bool applyRedirection(const Command &cmd, SavedFds& saved) {
+    if (cmd.outputFile != nullptr) {
+        int flags = O_WRONLY | O_CREAT | (cmd.appendOutput ? O_APPEND : O_TRUNC);
+        int fd = open(cmd.outputFile, flags, 0644);
+        if (fd == -1) {
+            perror(cmd.outputFile);
+            return false;
+        }
+        saved.savedStdout = dup(STDOUT_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+
+    if (cmd.inputFile != nullptr) {
+        int fd = open(cmd.inputFile, O_RDONLY);
+        if (fd == -1) {
+            perror(cmd.inputFile);
+            return false;
+        }
+        saved.savedStdin = dup(STDIN_FILENO);
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+    }
+
+    if (cmd.errorFile != nullptr) {
+        int flags = O_WRONLY | O_CREAT | (cmd.appendOutput ? O_APPEND : O_TRUNC);
+        int fd = open(cmd.errorFile, flags, 0644);
+        if (fd == -1) {
+            perror(cmd.errorFile);
+            return false;
+        }
+        saved.savedStderr = dup(STDERR_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+
+    return true;
+}
+
+static void restoreRedirection(SavedFds& saved) {
+    if (saved.savedStdout != -1) {
+        dup2(saved.savedStdout, STDOUT_FILENO);
+        close(saved.savedStdout);
+    }
+    if (saved.savedStdin != -1) {
+        dup2(saved.savedStdin, STDIN_FILENO);
+        close(saved.savedStdin);
+    }
+    if (saved.savedStderr != -1) {
+        dup2(saved.savedStderr, STDERR_FILENO);
+        close(saved.savedStderr);
+    }
+}
 
 void CommandHandler::execute(const Command& command) {
+    SavedFds saved;
+
+    if (!applyRedirection(command, saved)) {
+        return;
+    }
+
     if (strcmp(command.name, "cd") == 0) {
         cd(command);
     } else if (strcmp(command.name, "ls") == 0) {
@@ -29,9 +99,10 @@ void CommandHandler::execute(const Command& command) {
     } else if (strcmp(command.name, "echo") == 0) {
         echo(command);
     } else {
-        cout << "Unknown command: " << command.name << endl;
-        return;
+        executeExternal(const_cast<Command*>(&command));
     }
+
+    restoreRedirection(saved);
 }
 
 // cd
@@ -40,7 +111,7 @@ void CommandHandler::cd(const Command& command) {
         perror("Invalid Arguments");
         return;
     }
-    cout << "Executing cd command" << endl;
+
     char* path = command.argv[1];
 
     if (path == nullptr) {
@@ -59,7 +130,6 @@ void CommandHandler::cd(const Command& command) {
             perror("OLDPWD not set");
             return;
         }
-        printf("OLDPWD: %s\n", path);
     }
     
     char target[PATH_MAX];
@@ -72,15 +142,12 @@ void CommandHandler::cd(const Command& command) {
         return;
     }
 
-    printf("Changing directory to: %s\n", target);
-
     if (chdir(target) != 0) {
         perror("cd failed");
         return;
     }
 
     setenv("OLDPWD", cwd, 1);
-    printf("OLDPWD set to: %s\n", cwd);
 }
 
 // ls
@@ -160,7 +227,7 @@ void CommandHandler::ls(const Command& command) {
 
     bool a_flag = false, l_flag = false;
 
-    char* directories[256]; // adjust size or make dynamic as needed
+    char* directories[256];
     int dirCount = 0;
 
     for (int i = 1; command.argv[i] != nullptr; i++) {
@@ -215,7 +282,7 @@ void CommandHandler::pwd(const Command& command) {
 static bool searchRecursive(const char* dirPath, const char* target) {
     DIR* dir = opendir(dirPath);
     if (dir == nullptr) {
-        return false; // can't open this dir (permissions, etc.) — just skip it
+        return false;
     }
 
     struct dirent* entry;
@@ -227,7 +294,6 @@ static bool searchRecursive(const char* dirPath, const char* target) {
             continue;
         }
 
-        // Match by name, regardless of whether it's a file or directory
         if (strcmp(entry->d_name, target) == 0) {
             found = true;
             break;
@@ -238,8 +304,7 @@ static bool searchRecursive(const char* dirPath, const char* target) {
         snprintf(fullPath, sizeof(fullPath), "%s/%s", dirPath, entry->d_name);
 
         struct stat st;
-        // Use lstat (not stat) so we don't follow symlinks — avoids infinite
-        // loops from symlinked directories that point back up the tree
+        // If lstat fails, skip this entry (e.g., broken symlink)
         if (lstat(fullPath, &st) != 0) {
             continue;
         }
@@ -307,7 +372,7 @@ void CommandHandler::history(const Command& command) {
         return;
     }
 
-    // ---- Read entire history file into memory ----
+    // read history file
     int fd = open(historyFilePath, O_RDONLY);
     if (fd == -1) {
         perror("history: no history file");
@@ -330,7 +395,7 @@ void CommandHandler::history(const Command& command) {
 
     buf[totalRead] = '\0';
 
-    // ---- Split into lines, count total first (needed for -n / limit) ----
+    // Split into lines, count total first (needed for -n / limit)
     long totalLines = 0;
     for (size_t i = 0; i < totalRead; i++) {
         if (buf[i] == '\n') {
@@ -369,6 +434,7 @@ void CommandHandler::history(const Command& command) {
 }
 
 // pinfo
+// if environment runs macOS, use sysctl and proc_pidinfo to get process info
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #include <libproc.h>
@@ -444,6 +510,7 @@ void CommandHandler::pinfo(const Command& command) {
     printf("Executable Path -- %s\n", exeResolved);
 
 #else
+    // if environment runs Linux, use /proc filesystem to get process info
     char statPath[64];
     snprintf(statPath, sizeof(statPath), "/proc/%d/stat", pid);
 
@@ -509,7 +576,6 @@ void CommandHandler::echo(const Command& command) {
     bool e_flag = false;   // -e : interpret backslash escapes (\n, \t, etc.)
     int startIdx = 1;
 
-    // Parse leading flags only (real echo stops flag-parsing at the first non-flag arg)
     for (int i = 1; command.argv[i] != nullptr; i++) {
         char* arg = command.argv[i];
 
@@ -524,11 +590,10 @@ void CommandHandler::echo(const Command& command) {
             e_flag = true;
             startIdx = i + 1;
         } else {
-            break; // first non-flag token: stop parsing flags
+            break;
         }
     }
 
-    // Build the output string
     char outBuf[4096];
     size_t outLen = 0;
     outBuf[0] = '\0';
@@ -569,7 +634,6 @@ void CommandHandler::echo(const Command& command) {
     }
     outBuf[outLen] = '\0';
 
-    // Write using raw syscall, not stdio
     ssize_t written = 0;
     ssize_t total = 0;
     while (total < (ssize_t)outLen &&
@@ -579,5 +643,81 @@ void CommandHandler::echo(const Command& command) {
 
     if (written < 0) {
         perror("echo: write failed");
+    }
+}
+
+// external command execution
+void CommandHandler::executeExternal(Command* cmd) {
+    pid_t pid = fork();
+
+    if (pid == -1) {
+        perror("fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        // child process
+        setpgid(0, 0);
+
+        tcsetpgrp(STDIN_FILENO, getpid());
+
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+
+        if (cmd->outputFile != nullptr) {
+            int flags = O_WRONLY | O_CREAT | (cmd->appendOutput ? O_APPEND : O_TRUNC);
+            int fd = open(cmd->outputFile, flags, 0644);
+            if (fd == -1) {
+                perror(cmd->outputFile);
+                _exit(1);
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+
+        if (cmd->inputFile != nullptr) {
+            int fd = open(cmd->inputFile, O_RDONLY);
+            if (fd == -1) {
+                perror(cmd->inputFile);
+                _exit(1);
+            }
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+
+        if (cmd->errorFile != nullptr) {
+            int flags = O_WRONLY | O_CREAT | (cmd->appendOutput ? O_APPEND : O_TRUNC);
+            int fd = open(cmd->errorFile, flags, 0644);
+            if (fd == -1) {
+                perror(cmd->errorFile);
+                _exit(1);
+            }
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+
+        execvp(cmd->name, cmd->argv);
+
+        fprintf(stderr, "%s: command not found\n", cmd->name);
+        _exit(127);
+    }
+
+    // parent process
+    setpgid(pid, pid);
+    tcsetpgrp(STDIN_FILENO, pid);
+    
+    int status;
+    // wait for the child to finish
+    waitpid(pid, &status, WUNTRACED);
+
+    // shell takes back control after child is finished.
+    tcsetpgrp(STDIN_FILENO, getpid());
+
+    if (WIFEXITED(status)) {
+        // Optionally store status for a future "$?" feature
+        lastExitStatus = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        printf("Terminated by signal %d\n", WTERMSIG(status));
     }
 }

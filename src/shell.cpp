@@ -27,8 +27,14 @@ void freeCommands(char **commands) {
 }
 
 Shell::Shell() {
-    cout << "Running...\n";
     signal(SIGINT, signal_handler);
+
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+
+    setpgid(0, 0);
+    tcsetpgrp(STDIN_FILENO, getpid());
+
     const char* user = getenv("USER");
     if (user != nullptr) {
         username = user;
@@ -108,7 +114,7 @@ void Shell::process_input(char *input) {
     for (int i = 0; parsedCommands[i] != nullptr; i++) {
         Command *cmd = parsedCommands[i];
         
-        printf("Command %d: %s\n", i + 1, cmd->name);
+        // printf("Command %d: %s\n", i + 1, cmd->name);
 
         handler->execute(*cmd);
         // free(command);
@@ -260,7 +266,7 @@ void Shell::run() {
 
         readLine(input, sizeof(input));
 
-        cout << "You entered: " << input << endl;
+        // cout << "You entered: " << input << endl;
         is_processing_command = true;
         Shell::process_input(input);
         is_processing_command = false;

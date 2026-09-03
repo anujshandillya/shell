@@ -5,6 +5,7 @@
 class CommandHandler {
 public:
     void execute(const Command& command);
+    static int lastExitStatus; 
 
 private:
     void cd(const Command& command); // Done
@@ -14,4 +15,5 @@ private:
     void history(const Command& command); // Done
     void pinfo(const Command& command); // Done
     void echo(const Command& command); // Done
+    void executeExternal(Command* cmd); // Done
 };
