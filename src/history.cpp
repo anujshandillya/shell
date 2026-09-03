@@ -8,7 +8,11 @@
 using namespace std;
 
 History::History() {
-    int file = open(".anujsh", O_APPEND | O_CREAT | O_RDWR, 0600);
+    char *HISFILE = getenv("HISFILE");
+    if (HISFILE == nullptr) {
+        HISFILE = ".anujsh";
+    }
+    int file = open(HISFILE, O_APPEND | O_CREAT | O_RDWR, 0600);
     History::fd = file;
 }
 History::~History() {
