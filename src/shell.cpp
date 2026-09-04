@@ -30,10 +30,10 @@ void freeCommands(char **commands) {
 }
 
 Shell::Shell() {
-    signal(SIGINT, signal_handler);
+    signal(SIGINT, signal_handler); // Handle Ctrl+C
 
-    signal(SIGTTOU, SIG_IGN);
-    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN); // Ignore SIGTTOU to prevent the shell from being stopped when it tries to write to the terminal while in the background
+    signal(SIGTTIN, SIG_IGN); // Ignore SIGTTIN to prevent the shell from being stopped when it tries to read from the terminal while in the background
 
     setpgid(0, 0);
     tcsetpgrp(STDIN_FILENO, getpid());
@@ -131,6 +131,7 @@ void Shell::process_input(char *input) {
 
     // freeCommands(parsedCommands);
 
+    // Add the command to history after processing it
     Shell::history.add(inputCopy);
 
     bool shouldExit = (strcmp(input, "exit") == 0);
@@ -146,7 +147,6 @@ void Shell::process_input(char *input) {
 struct termios origTermios;
 
 namespace {
-
 bool isDirectory(const char *path) {
     struct stat info{};
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
@@ -157,12 +157,15 @@ struct CompletionMatches {
     int count;
 };
 
+// add a completion match to the list if it's not already present
 void addCompletion(CompletionMatches *matches, const char *name) {
+    // check if same name already exists in matches
     for (int i = 0; i < matches->count; ++i) {
         if (strcmp(matches->values[i], name) == 0) {
             return;
         }
     }
+    // matches do not exceed 128 entries, and each entry is limited to 255 characters
     if (matches->count < 128) {
         strncpy(matches->values[matches->count], name, 255);
         matches->values[matches->count][255] = '\0';
@@ -176,34 +179,39 @@ void scanDirectory(const char *path, const char *prefix, bool commandPosition,
     if (dir == nullptr) {
         return;
     }
-    struct dirent *entry;
+    struct dirent *entry; // pointer to directory entry
     while ((entry = readdir(dir)) != nullptr) {
         const char *name = entry->d_name;
+        // ignore if the name doesn't start with the prefix.
         if (strncmp(name, prefix, strlen(prefix)) != 0 ||
             (name[0] == '.' && prefix[0] == '\0')) {
             continue;
         }
 
         char fullPath[PATH_MAX];
+        // Build the full path to the entry for checking if it's executable
         snprintf(fullPath, sizeof(fullPath), "%s/%s", path, name);
         if (!commandPosition || hasSlash) {
-            addCompletion(matches, name);
+            addCompletion(matches, name); // If not in command position or has a slash, add all matches
         } else if (access(fullPath, X_OK) == 0 && !isDirectory(fullPath)) {
-            addCompletion(matches, name);
+            addCompletion(matches, name); // If in command position, only add executable files (not directories)
         }
     }
     closedir(dir);
 }
 
 CompletionMatches completionMatches(const char *buffer, size_t cursorPos) {
-    CompletionMatches matches{};
+    CompletionMatches matches{}; // empty structure
     size_t tokenStart = cursorPos;
+
+    // completion for only the last token in the buffer, so find the start of that token
     while (tokenStart > 0 && buffer[tokenStart - 1] != ' ' &&
            buffer[tokenStart - 1] != '\t') {
         --tokenStart;
     }
 
     char token[PATH_MAX];
+    // calculate the length of the token and copy it into a separate buffer
     size_t tokenLength = cursorPos - tokenStart;
     if (tokenLength >= sizeof(token)) {
         tokenLength = sizeof(token) - 1;
@@ -216,6 +224,7 @@ CompletionMatches completionMatches(const char *buffer, size_t cursorPos) {
     const char *slash = strrchr(token, '/');
     bool hasSlash = slash != nullptr;
     if (hasSlash) {
+        // If the token contains a slash, separate the directory and prefix for scanning
         size_t directoryLength = slash - token + 1;
         if (directoryLength >= sizeof(directory)) {
             directoryLength = sizeof(directory) - 1;
@@ -224,9 +233,10 @@ CompletionMatches completionMatches(const char *buffer, size_t cursorPos) {
         directory[directoryLength] = '\0';
         strcpy(prefix, slash + 1);
     } else {
+        // If the token does not contain a slash, use the entire token as the prefix
         strcpy(prefix, token);
     }
-
+    // If the token is at the start of the buffer and does not contain a slash, scan the directories in PATH for command completions
     if (tokenStart == 0 && !hasSlash) {
         const char *path = getenv("PATH");
         if (path != nullptr) {
@@ -256,20 +266,25 @@ CompletionMatches completionMatches(const char *buffer, size_t cursorPos) {
 
 void redrawLine(char *buffer, size_t &length, size_t &cursorPos,
                 const char *replacement, size_t replacementCursorPos) {
+    // Move the cursor back to the start of the line and clear the line
     for (size_t i = 0; i < cursorPos; ++i) {
         write(STDOUT_FILENO, "\b", 1);
     }
+    // Clear the line by overwriting with spaces and moving back again
     for (size_t i = 0; i < length; ++i) {
         write(STDOUT_FILENO, " ", 1);
     }
+    // Move the cursor back to the start of the line again
     for (size_t i = 0; i < length; ++i) {
         write(STDOUT_FILENO, "\b", 1);
     }
 
     const size_t replacementLength = strlen(replacement);
+    // Copy the replacement string into the buffer and update length and cursor position
     memcpy(buffer, replacement, replacementLength + 1);
     length = replacementLength;
     cursorPos = replacementCursorPos;
+    // Write the updated buffer to STDOUT and move the cursor to the correct position
     write(STDOUT_FILENO, buffer, length);
     for (size_t i = length; i > cursorPos; --i) {
         write(STDOUT_FILENO, "\b", 1);
@@ -278,6 +293,7 @@ void redrawLine(char *buffer, size_t &length, size_t &cursorPos,
 
 }
 
+// Enable raw mode for terminal input, disabling line buffering and echoing
 void Shell::enableRawMode() {
     tcgetattr(STDIN_FILENO, &origTermios);
     struct termios raw = origTermios;
@@ -287,6 +303,7 @@ void Shell::enableRawMode() {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
+// Restore the original terminal settings when exiting raw mode
 void Shell::disableRawMode() {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
 }
@@ -306,6 +323,17 @@ void Shell::readLine(char* buf, size_t bufSize) {
             return;
         }
 
+        // Ctrl+D signals EOF when there is no pending input.
+        if (c == 4) {
+            if (len == 0) {
+                write(STDOUT_FILENO, "\n", 1);
+                is_running = false;
+                return;
+            }
+            continue;
+        }
+
+        // handle tab keystroke for autocompletion/suggestions
         if (c == '\t') {
             CompletionMatches matches = completionMatches(buf, cursorPos);
             if (matches.count == 0) {
@@ -319,17 +347,16 @@ void Shell::readLine(char* buf, size_t bufSize) {
                 --tokenStart;
             }
             if (matches.count > 1) {
-                write(STDOUT_FILENO, "\n", 1);
+                // Keep the current input line in place while showing the matches.
+                write(STDOUT_FILENO, "\033[s", 3);
+                write(STDOUT_FILENO, "\r\n", 2);
                 for (int i = 0; i < matches.count; ++i) {
                     write(STDOUT_FILENO, matches.values[i],
                           strlen(matches.values[i]));
                     write(STDOUT_FILENO, "  ", 2);
                 }
-                write(STDOUT_FILENO, "\n", 1);
-                write(STDOUT_FILENO, buf, len);
-                for (size_t i = len; i > cursorPos; --i) {
-                    write(STDOUT_FILENO, "\b", 1);
-                }
+                write(STDOUT_FILENO, "\r\n", 2);
+                write(STDOUT_FILENO, "\033[u", 3);
                 continue;
             }
 
@@ -364,6 +391,7 @@ void Shell::readLine(char* buf, size_t bufSize) {
             continue;
         }
 
+        // execute command  on hitting Enter
         if (c == '\n' || c == '\r') {
             write(STDOUT_FILENO, "\n", 1);
             break;
@@ -488,6 +516,10 @@ void Shell::run() {
         char input[1024];
 
         readLine(input, sizeof(input));
+
+        if (!is_running) {
+            break;
+        }
 
         // cout << "You entered: " << input << endl;
         is_processing_command = true;
