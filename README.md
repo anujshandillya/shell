@@ -21,18 +21,14 @@ shell/
 │   ├── command_handler.hpp
 │   ├── history.hpp
 │   ├── parser.hpp
-│   ├── redirection.hpp
-│   ├── shell.hpp
-│   └── terminal.hpp
+│   └── shell.hpp
 ├── src/
 │   ├── command.cpp
 │   ├── command_handler.cpp
 │   ├── history.cpp
 │   ├── main.cpp
 │   ├── parser.cpp
-│   ├── redirection.cpp
-│   ├── shell.cpp
-│   └── terminal.cpp
+│   └── shell.cpp
 ├── Makefile
 └── README.md
 ```
