@@ -1,8 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <string>
-#include <vector>
+#include <sys/types.h>
 
 class History {
 public:
@@ -16,8 +15,11 @@ public:
     ~History();
 
 private:
-    static constexpr std::size_t maxCommands = 20;
-    std::vector<std::string> commands;
-    std::size_t currentIndex;
+    static const int maxCommands = 20;
+    char *commands[maxCommands];
+    int commandCount;
+    int currentIndex;
     int fd;
+
+    ssize_t readLine(char *line, size_t capacity);
 };

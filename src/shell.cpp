@@ -8,6 +8,9 @@
 #include <termios.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <cstring>
 
 using namespace std;
 
@@ -142,6 +145,139 @@ void Shell::process_input(char *input) {
 
 struct termios origTermios;
 
+namespace {
+
+bool isDirectory(const char *path) {
+    struct stat info{};
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+struct CompletionMatches {
+    char values[128][256];
+    int count;
+};
+
+void addCompletion(CompletionMatches *matches, const char *name) {
+    for (int i = 0; i < matches->count; ++i) {
+        if (strcmp(matches->values[i], name) == 0) {
+            return;
+        }
+    }
+    if (matches->count < 128) {
+        strncpy(matches->values[matches->count], name, 255);
+        matches->values[matches->count][255] = '\0';
+        ++matches->count;
+    }
+}
+
+void scanDirectory(const char *path, const char *prefix, bool commandPosition,
+                   bool hasSlash, CompletionMatches *matches) {
+    DIR *dir = opendir(path);
+    if (dir == nullptr) {
+        return;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        const char *name = entry->d_name;
+        if (strncmp(name, prefix, strlen(prefix)) != 0 ||
+            (name[0] == '.' && prefix[0] == '\0')) {
+            continue;
+        }
+
+        char fullPath[PATH_MAX];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, name);
+        if (!commandPosition || hasSlash) {
+            addCompletion(matches, name);
+        } else if (access(fullPath, X_OK) == 0 && !isDirectory(fullPath)) {
+            addCompletion(matches, name);
+        }
+    }
+    closedir(dir);
+}
+
+CompletionMatches completionMatches(const char *buffer, size_t cursorPos) {
+    CompletionMatches matches{};
+    size_t tokenStart = cursorPos;
+    while (tokenStart > 0 && buffer[tokenStart - 1] != ' ' &&
+           buffer[tokenStart - 1] != '\t') {
+        --tokenStart;
+    }
+
+    char token[PATH_MAX];
+    size_t tokenLength = cursorPos - tokenStart;
+    if (tokenLength >= sizeof(token)) {
+        tokenLength = sizeof(token) - 1;
+    }
+    memcpy(token, buffer + tokenStart, tokenLength);
+    token[tokenLength] = '\0';
+
+    char directory[PATH_MAX] = ".";
+    char prefix[PATH_MAX];
+    const char *slash = strrchr(token, '/');
+    bool hasSlash = slash != nullptr;
+    if (hasSlash) {
+        size_t directoryLength = slash - token + 1;
+        if (directoryLength >= sizeof(directory)) {
+            directoryLength = sizeof(directory) - 1;
+        }
+        memcpy(directory, token, directoryLength);
+        directory[directoryLength] = '\0';
+        strcpy(prefix, slash + 1);
+    } else {
+        strcpy(prefix, token);
+    }
+
+    if (tokenStart == 0 && !hasSlash) {
+        const char *path = getenv("PATH");
+        if (path != nullptr) {
+            const char *start = path;
+            const char *end;
+            char pathEntry[PATH_MAX];
+            while (*start != '\0') {
+                end = strchr(start, ':');
+                size_t length = end == nullptr ? strlen(start) : (size_t)(end - start);
+                if (length == 0) {
+                    strcpy(pathEntry, ".");
+                } else {
+                    if (length >= sizeof(pathEntry)) length = sizeof(pathEntry) - 1;
+                    memcpy(pathEntry, start, length);
+                    pathEntry[length] = '\0';
+                }
+                scanDirectory(pathEntry, prefix, true, false, &matches);
+                if (end == nullptr) break;
+                start = end + 1;
+            }
+        }
+    } else {
+        scanDirectory(directory, prefix, false, hasSlash, &matches);
+    }
+    return matches;
+}
+
+void redrawLine(char *buffer, size_t &length, size_t &cursorPos,
+                const char *replacement, size_t replacementCursorPos) {
+    for (size_t i = 0; i < cursorPos; ++i) {
+        write(STDOUT_FILENO, "\b", 1);
+    }
+    for (size_t i = 0; i < length; ++i) {
+        write(STDOUT_FILENO, " ", 1);
+    }
+    for (size_t i = 0; i < length; ++i) {
+        write(STDOUT_FILENO, "\b", 1);
+    }
+
+    const size_t replacementLength = strlen(replacement);
+    memcpy(buffer, replacement, replacementLength + 1);
+    length = replacementLength;
+    cursorPos = replacementCursorPos;
+    write(STDOUT_FILENO, buffer, length);
+    for (size_t i = length; i > cursorPos; --i) {
+        write(STDOUT_FILENO, "\b", 1);
+    }
+}
+
+}
+
 void Shell::enableRawMode() {
     tcgetattr(STDIN_FILENO, &origTermios);
     struct termios raw = origTermios;
@@ -158,6 +294,8 @@ void Shell::disableRawMode() {
 void Shell::readLine(char* buf, size_t bufSize) {
     size_t len = 0;        // total chars in buffer
     size_t cursorPos = 0;  // where the cursor currently is
+    char savedLine[1024] = "";
+    bool browsingHistory = false;
     buf[0] = '\0';
 
     while (true) {
@@ -169,8 +307,60 @@ void Shell::readLine(char* buf, size_t bufSize) {
         }
 
         if (c == '\t') {
-            // Handle tab autocompletion
-            // handleTabCompletion(buf, len, bufSize);
+            CompletionMatches matches = completionMatches(buf, cursorPos);
+            if (matches.count == 0) {
+                write(STDOUT_FILENO, "\a", 1);
+                continue;
+            }
+
+            size_t tokenStart = cursorPos;
+            while (tokenStart > 0 && buf[tokenStart - 1] != ' ' &&
+                   buf[tokenStart - 1] != '\t') {
+                --tokenStart;
+            }
+            if (matches.count > 1) {
+                write(STDOUT_FILENO, "\n", 1);
+                for (int i = 0; i < matches.count; ++i) {
+                    write(STDOUT_FILENO, matches.values[i],
+                          strlen(matches.values[i]));
+                    write(STDOUT_FILENO, "  ", 2);
+                }
+                write(STDOUT_FILENO, "\n", 1);
+                write(STDOUT_FILENO, buf, len);
+                for (size_t i = len; i > cursorPos; --i) {
+                    write(STDOUT_FILENO, "\b", 1);
+                }
+                continue;
+            }
+
+            char completed[1024];
+            strcpy(completed, buf);
+            completed[tokenStart] = '\0';
+            strcat(completed, matches.values[0]);
+            char candidate[PATH_MAX];
+            const char *slash = strrchr(buf + tokenStart, '/');
+            if (slash != nullptr) {
+                size_t directoryLength = slash - (buf + tokenStart) + 1;
+                memcpy(candidate, buf + tokenStart, directoryLength);
+                candidate[directoryLength] = '\0';
+                strcat(candidate, matches.values[0]);
+            } else {
+                strcpy(candidate, matches.values[0]);
+            }
+            const bool candidateIsDirectory = isDirectory(candidate);
+            if (candidateIsDirectory) {
+                strcat(completed, "/");
+            } else if (tokenStart == 0) {
+                strcat(completed, " ");
+            }
+            strcat(completed, buf + cursorPos);
+            if (strlen(completed) < bufSize) {
+                const size_t insertedLength =
+                    strlen(matches.values[0]) +
+                    (candidateIsDirectory || tokenStart == 0 ? 1 : 0);
+                redrawLine(buf, len, cursorPos, completed,
+                           tokenStart + insertedLength);
+            }
             continue;
         }
 
@@ -181,6 +371,7 @@ void Shell::readLine(char* buf, size_t bufSize) {
 
         // ---- Backspace: delete char BEFORE cursor ----
         if (c == 127 || c == '\b') {
+            browsingHistory = false;
             if (cursorPos > 0) {
                 // shift everything right of cursor one slot left
                 memmove(buf + cursorPos - 1, buf + cursorPos, len - cursorPos);
@@ -207,6 +398,31 @@ void Shell::readLine(char* buf, size_t bufSize) {
             if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
 
             if (seq[0] == '[') {
+                if (seq[1] == 'A') { // Up arrow
+                    if (!browsingHistory) {
+                        memcpy(savedLine, buf, len);
+                        savedLine[len] = '\0';
+                        browsingHistory = true;
+                    }
+                    const char *command = history.previous();
+                    if (command != nullptr) {
+                        redrawLine(buf, len, cursorPos, command, strlen(command));
+                    }
+                    continue;
+                }
+                if (seq[1] == 'B') { // Down arrow
+                    const char *command = history.next();
+                    if (command != nullptr) {
+                        if (browsingHistory && command[0] == '\0') {
+                            redrawLine(buf, len, cursorPos, savedLine,
+                                       strlen(savedLine));
+                            browsingHistory = false;
+                        } else {
+                            redrawLine(buf, len, cursorPos, command, strlen(command));
+                        }
+                    }
+                    continue;
+                }
                 if (seq[1] == 'C') { // Right arrow
                     if (cursorPos < len) {
                         write(STDOUT_FILENO, buf + cursorPos, 1);
@@ -245,6 +461,7 @@ void Shell::readLine(char* buf, size_t bufSize) {
         }
 
         // ---- Normal printable character: insert at cursor ----
+        browsingHistory = false;
         if (len < bufSize - 1) {
             // shift everything right of cursor one slot right to make room
             memmove(buf + cursorPos + 1, buf + cursorPos, len - cursorPos);
