@@ -77,13 +77,7 @@ static void restoreRedirection(SavedFds& saved) {
     }
 }
 
-void CommandHandler::execute(const Command& command) {
-    SavedFds saved;
-
-    if (!applyRedirection(command, saved)) {
-        return;
-    }
-
+bool CommandHandler::executeBuiltin(const Command& command) {
     if (strcmp(command.name, "cd") == 0) {
         cd(command);
     } else if (strcmp(command.name, "ls") == 0) {
@@ -99,9 +93,29 @@ void CommandHandler::execute(const Command& command) {
     } else if (strcmp(command.name, "echo") == 0) {
         echo(command);
     } else {
+        return false;
+    }
+    return true;
+}
+
+void CommandHandler::execute(const Command& command) {
+    if (strcmp(command.name, "cd") != 0 &&
+        strcmp(command.name, "ls") != 0 &&
+        strcmp(command.name, "pwd") != 0 &&
+        strcmp(command.name, "search") != 0 &&
+        strcmp(command.name, "history") != 0 &&
+        strcmp(command.name, "pinfo") != 0 &&
+        strcmp(command.name, "echo") != 0) {
         executeExternal(const_cast<Command*>(&command));
+        return;
     }
 
+    SavedFds saved;
+    if (!applyRedirection(command, saved)) {
+        return;
+    }
+
+    executeBuiltin(command);
     restoreRedirection(saved);
 }
 
@@ -644,6 +658,167 @@ void CommandHandler::echo(const Command& command) {
     if (written < 0) {
         perror("echo: write failed");
     }
+}
+
+static bool applyPipelineRedirection(const Command& command) {
+    if (command.inputFile != nullptr) {
+        int fd = open(command.inputFile, O_RDONLY);
+        if (fd == -1) {
+            perror(command.inputFile);
+            return false;
+        }
+        if (dup2(fd, STDIN_FILENO) == -1) {
+            perror("dup2");
+            close(fd);
+            return false;
+        }
+        close(fd);
+    }
+
+    if (command.outputFile != nullptr) {
+        int flags = O_WRONLY | O_CREAT |
+            (command.appendOutput ? O_APPEND : O_TRUNC);
+        int fd = open(command.outputFile, flags, 0644);
+        if (fd == -1) {
+            perror(command.outputFile);
+            return false;
+        }
+        if (dup2(fd, STDOUT_FILENO) == -1) {
+            perror("dup2");
+            close(fd);
+            return false;
+        }
+        close(fd);
+    }
+
+    if (command.errorFile != nullptr) {
+        int fd = open(command.errorFile, O_WRONLY | O_CREAT |
+                      (command.appendOutput ? O_APPEND : O_TRUNC), 0644);
+        if (fd == -1) {
+            perror(command.errorFile);
+            return false;
+        }
+        if (dup2(fd, STDERR_FILENO) == -1) {
+            perror("dup2");
+            close(fd);
+            return false;
+        }
+        close(fd);
+    }
+
+    return true;
+}
+
+void CommandHandler::executePipeline(Command** commands, int count) {
+    if (commands == nullptr || count <= 0) {
+        return;
+    }
+
+    int (*pipes)[2] = nullptr;
+    if (count > 1) {
+        pipes = new int[count - 1][2];
+        for (int i = 0; i < count - 1; i++) {
+            if (pipe(pipes[i]) == -1) {
+                perror("pipe");
+                for (int j = 0; j < i; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
+                delete[] pipes;
+                return;
+            }
+        }
+    }
+
+    pid_t* pids = new pid_t[count];
+    pid_t processGroup = 0;
+    int started = 0;
+
+    for (int i = 0; i < count; i++) {
+        fflush(nullptr);
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("fork failed");
+            break;
+        }
+
+        if (pid == 0) {
+            if (processGroup == 0) {
+                processGroup = getpid();
+            }
+            if (setpgid(0, processGroup) == -1) {
+                perror("setpgid");
+                _exit(1);
+            }
+
+            if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) == -1) {
+                perror("dup2");
+                _exit(1);
+            }
+            if (i < count - 1 && dup2(pipes[i][1], STDOUT_FILENO) == -1) {
+                perror("dup2");
+                _exit(1);
+            }
+
+            for (int j = 0; j < count - 1; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+
+            if (!applyPipelineRedirection(*commands[i])) {
+                _exit(1);
+            }
+
+            if (executeBuiltin(*commands[i])) {
+                fflush(nullptr);
+                _exit(lastExitStatus);
+            }
+
+            execvp(commands[i]->name, commands[i]->argv);
+            fprintf(stderr, "%s: command not found\n", commands[i]->name);
+            _exit(127);
+        }
+
+        if (processGroup == 0) {
+            processGroup = pid;
+        }
+        setpgid(pid, processGroup);
+        pids[started++] = pid;
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+    delete[] pipes;
+
+    if (started > 0) {
+        tcsetpgrp(STDIN_FILENO, processGroup);
+        int status = 0;
+        for (int i = 0; i < started; i++) {
+            int childStatus;
+            if (waitpid(pids[i], &childStatus, WUNTRACED) == -1) {
+                perror("waitpid");
+                continue;
+            }
+            if (i == started - 1) {
+                status = childStatus;
+            }
+        }
+        tcsetpgrp(STDIN_FILENO, getpid());
+
+        if (WIFEXITED(status)) {
+            lastExitStatus = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            lastExitStatus = 128 + WTERMSIG(status);
+        }
+    }
+
+    delete[] pids;
 }
 
 // external command execution

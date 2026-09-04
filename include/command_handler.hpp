@@ -5,6 +5,7 @@
 class CommandHandler {
 public:
     void execute(const Command& command);
+    void executePipeline(Command** commands, int count);
     static int lastExitStatus; 
 
 private:
@@ -16,4 +17,5 @@ private:
     void pinfo(const Command& command); // Done
     void echo(const Command& command); // Done
     void executeExternal(Command* cmd); // Done
+    bool executeBuiltin(const Command& command);
 };

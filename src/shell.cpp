@@ -111,13 +111,19 @@ void Shell::process_input(char *input) {
         return;
     }
 
-    for (int i = 0; parsedCommands[i] != nullptr; i++) {
-        Command *cmd = parsedCommands[i];
-        
-        // printf("Command %d: %s\n", i + 1, cmd->name);
+    for (int i = 0; parsedCommands[i] != nullptr;) {
+        int pipelineLength = 1;
+        while (parsedCommands[i + pipelineLength - 1]->pipeToNext &&
+               parsedCommands[i + pipelineLength] != nullptr) {
+            pipelineLength++;
+        }
 
-        handler->execute(*cmd);
-        // free(command);
+        if (pipelineLength == 1) {
+            handler->execute(*parsedCommands[i]);
+        } else {
+            handler->executePipeline(&parsedCommands[i], pipelineLength);
+        }
+        i += pipelineLength;
     }
 
     // freeCommands(parsedCommands);
