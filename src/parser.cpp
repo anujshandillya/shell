@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdlib>
 
+// Helper function to split the input string into commands based on separators
 static int splitOnSeparators(char* input, char** outCommands, char* outSeparators) {
     int count = 0;
     char* p = input;
@@ -17,6 +18,7 @@ static int splitOnSeparators(char* input, char** outCommands, char* outSeparator
             continue;
         }
 
+        // Handle escape sequences
         if (*p == '|' || *p == ';') {
             char sep = *p;
             *p = '\0';
@@ -31,6 +33,7 @@ static int splitOnSeparators(char* input, char** outCommands, char* outSeparator
         p++;
     }
 
+    // Handle the last segment if it exists
     if (p != segStart) {
         outCommands[count] = segStart;
         outSeparators[count] = '\0';
@@ -40,6 +43,7 @@ static int splitOnSeparators(char* input, char** outCommands, char* outSeparator
     return count;
 }
 
+// Helper function to tokenize the command string into arguments, handling quotes and spaces
 static int tokenizeArgs(char* input, char** outTokens) {
     int count = 0;
     char* p = input;
@@ -79,21 +83,26 @@ static int tokenizeArgs(char* input, char** outTokens) {
     return count;
 }
 
+// Helper function to extract redirection operators and their corresponding files from the tokens
 static int extractRedirection(char** tokens, int tokenCount, Command* cmd) {
     int writeIdx = 0;
     for (int i = 0; i < tokenCount; i++) {
         if (strcmp(tokens[i], ">") == 0 && i + 1 < tokenCount) {
+            // Set the output file for the command and indicate that it should truncate >
             cmd->outputFile = strdup(tokens[i + 1]);
             cmd->appendOutput = false;
             i++;
         } else if (strcmp(tokens[i], ">>") == 0 && i + 1 < tokenCount) {
+            // Set the output file for the command and indicate that it should append >>
             cmd->outputFile = strdup(tokens[i + 1]);
             cmd->appendOutput = true;
             i++;
         } else if (strcmp(tokens[i], "<") == 0 && i + 1 < tokenCount) {
+            // Set the input file for the command
             cmd->inputFile = strdup(tokens[i + 1]);
             i++;
         } else if (strcmp(tokens[i], "2>") == 0 && i + 1 < tokenCount) {
+            // Set the error file for the command
             cmd->errorFile = strdup(tokens[i + 1]);
             i++;
         } else {
@@ -126,6 +135,7 @@ Command **Parser::parse(char *input) {
         return nullptr;
     }
 
+    // Allocate an array of Command pointers to hold the parsed command objects
     Command **commandObjects = new Command*[commandCount + 1];
     int objCount = 0;
 
@@ -140,6 +150,7 @@ Command **Parser::parse(char *input) {
             continue;
         }
 
+        // Create a new Command object and populate its fields
         char *commandName = strdup(tokens[0]);
 
         char **arguments = new char*[tokenCount + 1];
@@ -149,17 +160,18 @@ Command **Parser::parse(char *input) {
         }
         arguments[tokenCount] = nullptr;
 
+        // Create the Command object with the command name and arguments
         Command *commandObj = new Command(commandName, arguments, tokenCount);
 
         int newArgc = extractRedirection(arguments, tokenCount, commandObj);
         arguments[newArgc] = nullptr;
-        commandObj->argc = newArgc;
+        commandObj->argc = newArgc; // Update argc after redirection extraction
 
-        commandObj->pipeToNext = (separators[i] == '|');
+        commandObj->pipeToNext = (separators[i] == '|'); // Set pipeToNext based on the separator
 
-        commandObjects[objCount++] = commandObj;
+        commandObjects[objCount++] = commandObj; // Add the command object to the array
 
-        delete[] tokens;
+        delete[] tokens; // free the tokens array
     }
 
     commandObjects[objCount] = nullptr;
