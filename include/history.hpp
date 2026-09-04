@@ -1,8 +1,8 @@
 #pragma once
 
-#include <iostream>
-
-using namespace std;
+#include <cstddef>
+#include <string>
+#include <vector>
 
 class History {
 public:
@@ -14,8 +14,10 @@ public:
 
     void print();
     ~History();
+
 private:
-    char **commands;
-    int currentIndex;
+    static constexpr std::size_t maxCommands = 20;
+    std::vector<std::string> commands;
+    std::size_t currentIndex;
     int fd;
 };
